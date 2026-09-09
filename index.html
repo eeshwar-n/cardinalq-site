@@ -425,7 +425,8 @@
     // rotate (phone compass), or the screen is narrow, they ride a rectangle tucked inside
     // the header and the foot so they never cross the nav or the scroll cue.
     const safe = heading !== null || W < 700;
-    const tTop = safe ? A.hb : A.iy, tBot = safe ? A.fb : A.iy;
+    const inset = Math.max(A.hb, A.fb);                       // symmetric about the center
+    const tTop = safe ? inset : A.iy, tBot = safe ? inset : A.iy;
     if (instant || !dialTop){ dialTop = tTop; dialBot = tBot; }
     else { dialTop += (tTop - dialTop) * 0.12; dialBot += (tBot - dialBot) * 0.12; }
     const cx = W / 2, cy = H / 2, x0 = A.ix, x1 = W - A.ix, y0 = dialTop, y1 = H - dialBot;
