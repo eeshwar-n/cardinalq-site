@@ -44,11 +44,15 @@
   }
   .hero canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   .dial{position:absolute;inset:0;z-index:1;pointer-events:none}
-  .dial span{position:absolute;left:0;top:0;font-size:12px;font-weight:500;letter-spacing:.1em;color:var(--bone-dim);will-change:transform;line-height:1}
-  .hero header,.hero .foot{position:relative;z-index:2;display:flex;justify-content:space-between;align-items:baseline;gap:16px;padding:clamp(18px,3vw,36px) var(--gutter);font-size:14px;color:var(--bone-dim)}
+  .dial span{position:absolute;left:0;top:0;font-size:12px;font-weight:500;letter-spacing:.1em;color:var(--bone-dim);will-change:transform;line-height:1;transition:opacity .25s}
+  .hero header,.hero .foot{position:absolute;left:0;right:0;z-index:2;display:flex;justify-content:space-between;align-items:baseline;gap:16px;padding:clamp(18px,3vw,36px) var(--gutter);font-size:14px;color:var(--bone-dim)}
+  .hero header{top:0}
+  .hero .foot{bottom:0}
   .hero header a,.hero .foot a{color:var(--bone);border-color:var(--bone-dim)}
+  .hero header nav a{border-bottom-color:transparent}
+  .hero header nav a:hover{border-bottom-color:var(--bone-dim)}
   .hero .foot{justify-content:flex-end;align-items:flex-end}
-  .hero .center{position:relative;z-index:2;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 20px}
+  .hero .center{position:relative;z-index:2;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 20px}
 
   /* brand lockup + section links, shared by hero header and page nav */
   .brand{border:0;font-weight:700;font-size:clamp(20px,1.7vw,26px);line-height:.86;letter-spacing:-.045em;display:inline-block;user-select:none;transition:opacity .15s}
@@ -178,6 +182,7 @@
     .note{grid-template-columns:1fr auto;gap:6px 16px}
     .note .date{grid-column:1/-1}
     .hero header,.hero .foot,.nav{font-size:13px}
+    .hero .center{padding-top:28px}
     nav{gap:16px}
     nav a.opt{display:none}
     footer .legal{flex-basis:100%;text-align:left;order:3}
@@ -370,6 +375,9 @@
   const nav = document.getElementById('nav');
   const page = document.querySelector('.page');
   const labels = [...document.querySelectorAll('.dial span')];
+  const foot = hero.querySelector('.foot');
+  const brand = hdr.querySelector('.brand'), navEl = hdr.querySelector('nav');
+  let dialTop = 0, dialBot = 0;   // current insets, eased toward their targets
   const ctx = c.getContext('2d');
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -398,29 +406,46 @@
   }
 
   function anchors(){
-    const r = c.getBoundingClientRect(), s = dot.getBoundingClientRect(), m = mark.getBoundingClientRect(), h = hdr.getBoundingClientRect();
+    const r = c.getBoundingClientRect(), s = dot.getBoundingClientRect(), m = mark.getBoundingClientRect(), h = hdr.getBoundingClientRect(), f = foot.getBoundingClientRect();
     return {
       sx: s.left + s.width / 2 - r.left, sy: s.top + s.height / 2 - r.top,
       x0: m.left - r.left - 28, x1: m.right - r.left + 28,
       y0: m.top - r.top - 12,  y1: m.bottom - r.top + 12,
       ix: parseFloat(getComputedStyle(hdr).paddingLeft) + 5,
-      iy: h.top + h.height / 2 - r.top
+      iy: h.top + h.height / 2 - r.top,            // aligned with the header text
+      hb: h.bottom - r.top + 14,                   // just below the header
+      fb: r.bottom - f.top + 14,                   // just above the foot (cue)
+      r
     };
   }
+  const hit = (x, y, el, pad) => { const b = el.getBoundingClientRect(); return x > b.left - pad && x < b.right + pad && y > b.top - pad && y < b.bottom + pad; };
 
-  function placeDial(A){
-    const cx = W / 2, cy = H / 2, hw = W / 2 - A.ix, hh = H / 2 - A.iy;
+  function placeDial(A, instant){
+    // On wide screens the marks sit on the header line and never move. Once the dial can
+    // rotate (phone compass), or the screen is narrow, they ride a rectangle tucked inside
+    // the header and the foot so they never cross the nav or the scroll cue.
+    const safe = heading !== null || W < 700;
+    const tTop = safe ? A.hb : A.iy, tBot = safe ? A.fb : A.iy;
+    if (instant || !dialTop){ dialTop = tTop; dialBot = tBot; }
+    else { dialTop += (tTop - dialTop) * 0.12; dialBot += (tBot - dialBot) * 0.12; }
+    const cx = W / 2, cy = H / 2, x0 = A.ix, x1 = W - A.ix, y0 = dialTop, y1 = H - dialBot;
     for (let i = 0; i < 4; i++){
       const th = DIRS[i] + rot, cs = Math.cos(th), sn = Math.sin(th);
-      const t = Math.min(hw / Math.max(Math.abs(cs), 1e-6), hh / Math.max(Math.abs(sn), 1e-6));
-      labels[i].style.transform = `translate(${(cx + t * cs).toFixed(1)}px,${(cy + t * sn).toFixed(1)}px) translate(-50%,-50%)`;
+      const tx = cs > 1e-6 ? (x1 - cx) / cs : cs < -1e-6 ? (x0 - cx) / cs : Infinity;
+      const ty = sn > 1e-6 ? (y1 - cy) / sn : sn < -1e-6 ? (y0 - cy) / sn : Infinity;
+      const t = Math.min(tx, ty), x = cx + t * cs, y = cy + t * sn;
+      labels[i].style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px) translate(-50%,-50%)`;
+      // vanish while passing behind anything that matters
+      const px = x + A.r.left, py = y + A.r.top;
+      const blocked = (x > A.x0 && x < A.x1 && y > A.y0 && y < A.y1) || hit(px, py, brand, 10) || hit(px, py, navEl, 10) || hit(px, py, cue, 10);
+      labels[i].style.opacity = blocked ? '0' : '';
     }
   }
 
   function frame(now, instant){
     const A = anchors();
     if (heading !== null){ const rt = -heading * Math.PI / 180; rot += instant ? wrap(rt - rot) : wrap(rt - rot) * 0.12; }
-    placeDial(A);
+    placeDial(A, instant);
 
     ctx.clearRect(0, 0, W, H);
     ctx.lineWidth = 1; ctx.lineCap = 'round';
