@@ -382,10 +382,12 @@
       // red is the last price and the trades that moved it. Pure simulation, no data.
       const c = document.getElementById('heat'), fig = document.getElementById('heatfig');
       const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const W = 1200, H = 420, CW = 3, RH = 3, ROWS = Math.floor(H / RH);
-      const dpr = Math.min(devicePixelRatio || 1, 2);
+      const narrow = innerWidth < 700;
+      const W = narrow ? 720 : 1200, H = 420, CW = 3, RH = 3, ROWS = Math.floor(H / RH), COLS = Math.ceil(W / CW);
+      const dpr = Math.min(devicePixelRatio || 1, narrow ? 1.5 : 2);
       c.width = W * dpr; c.height = H * dpr;
       const ctx = c.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const INK = '27,12,12', RED = '#8E1B1B';
       const rnd = Math.random;
 
@@ -399,16 +401,14 @@
       let liq = new Float32Array(ROWS), walls = [], price = ROWS / 2, last = price, vel = 0, t = 0;
       for (let r = 0; r < ROWS; r++) liq[r] = 0.06 + 0.04 * rnd();
 
-      function step(){
+      // advance the model one tick; returns what the painter needs
+      function simulate(){
         t++;
-        // price: momentum plus mean reversion, with the occasional sweep
         vel = vel * 0.6 + (rnd() - 0.5) * 0.9 + (ROWS / 2 - price) * 0.0025;
         let dp = vel;
         const sweep = rnd() < 0.025;
         if (sweep) dp += (rnd() < 0.5 ? -1 : 1) * (4 + rnd() * 6);
         const from = price; price = Math.min(ROWS - 6, Math.max(5, price + dp));
-
-        // liquidity: a calm landscape that thickens away from price, with shelves every ten levels
         for (let r = 0; r < ROWS; r++){
           const d = Math.abs(r - price);
           let rest = d < 2 ? 0.02 : Math.min(0.30, 0.06 + 0.006 * d);
@@ -417,52 +417,59 @@
           if (liq[r] < 0) liq[r] = 0;
         }
         const lo = Math.floor(Math.min(from, price)), hi = Math.ceil(Math.max(from, price));
-        if (hi - lo > 2) for (let r = lo; r <= hi; r++) liq[r] *= 0.3;     // a sweep eats what it crosses
-
-        // walls: large resting orders that sit at a level, then pull, sometimes just before price arrives
+        if (hi - lo > 2) for (let r = lo; r <= hi; r++) liq[r] *= 0.3;
         if (rnd() < 0.04 && walls.length < 5){
           const side = rnd() < 0.5 ? -1 : 1;
           walls.push({ r: Math.round(price + side * (8 + rnd() * 30)), size: 0.8 + rnd() * 0.3, life: 120 + rnd() * 520 });
         }
-        walls = walls.filter(w => (w.life -= 1) > 0 && w.r > 1 && w.r < ROWS - 1 && Math.abs(w.r - price) > 1.2 && (w.r - from) * (w.r - price) > 0);   // crossed walls are gone
+        walls = walls.filter(w => (w.life -= 1) > 0 && w.r > 1 && w.r < ROWS - 1 && Math.abs(w.r - price) > 1.2 && (w.r - from) * (w.r - price) > 0);
         for (const w of walls) liq[w.r] = Math.max(liq[w.r], w.size);
+        return { dp, sweep };
+      }
 
-        // scroll left by one column, replacing rather than stacking
+      // paint one column at x from the current model state
+      function paint(x, info){
+        for (let r = 0; r < ROWS; r++){
+          const a = 0.015 + 0.85 * Math.pow(Math.min(1, liq[r]), 2);
+          ctx.fillStyle = `rgba(${INK},${a.toFixed(3)})`;
+          ctx.fillRect(x, r * RH, CW, RH);
+        }
+        ctx.strokeStyle = RED; ctx.lineWidth = 1.25; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x - 1, last * RH + 1.5); ctx.lineTo(x + CW - 1, price * RH + 1.5); ctx.stroke();
+        const size = Math.abs(info.dp);
+        if (info.sweep || (size > 0.7 && rnd() < 0.5)){
+          ctx.fillStyle = RED; ctx.globalAlpha = 0.9;
+          ctx.beginPath(); ctx.arc(x + CW - 1.5, price * RH + 1.5, Math.min(6, 1.2 + size * 0.5), 0, Math.PI * 2); ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+        last = price;
+      }
+
+      // one live tick: shift everything left one column, paint the new one
+      function tick(){
+        const info = simulate();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalCompositeOperation = 'copy';
         ctx.drawImage(c, CW * dpr, 0, (W - CW) * dpr, H * dpr, 0, 0, (W - CW) * dpr, H * dpr);
         ctx.globalCompositeOperation = 'source-over';
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(W - CW, 0, CW, H);
-
-        // the new column
-        for (let r = 0; r < ROWS; r++){
-          const a = 0.015 + 0.85 * Math.pow(Math.min(1, liq[r]), 2);
-          ctx.fillStyle = `rgba(${INK},${a.toFixed(3)})`;
-          ctx.fillRect(W - CW, r * RH, CW, RH);
-        }
-        // last price, and the trades that moved it
-        ctx.strokeStyle = RED; ctx.lineWidth = 1.25; ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(W - CW - 1, last * RH + 1.5); ctx.lineTo(W - 1, price * RH + 1.5); ctx.stroke();
-        const size = Math.abs(dp);
-        if (sweep || (size > 0.7 && rnd() < 0.5)){
-          ctx.fillStyle = RED; ctx.globalAlpha = 0.9;
-          ctx.beginPath(); ctx.arc(W - 1.5, price * RH + 1.5, Math.min(6, 1.2 + size * 0.5), 0, Math.PI * 2); ctx.fill();
-          ctx.globalAlpha = 1;
-        }
-        last = price;
+        paint(W - CW, info);
       }
 
-      for (let i = 0; i < Math.ceil(W / CW); i++) step();   // fill the frame before anyone sees it
+      // fill the frame before anyone sees it: paint straight into place, no scrolling
+      for (let i = 0; i < COLS; i++) paint(i * CW, simulate());
       if (reduce) return;
+
       let running = false, raf = 0, acc = 0, prev = 0;
       function loop(now){
-        if (!prev) prev = now; acc += now - prev; prev = now;
-        while (acc > 80){ step(); acc -= 80; }
+        if (!prev) prev = now;
+        acc = Math.min(acc + (now - prev), 240); prev = now;     // never try to catch up more than three ticks
+        while (acc >= 80){ tick(); acc -= 80; }
         raf = running ? requestAnimationFrame(loop) : 0;
       }
       function set(on){
-        if (on && !running){ running = true; prev = 0; raf = requestAnimationFrame(loop); }
+        if (on && !running){ running = true; prev = 0; acc = 0; raf = requestAnimationFrame(loop); }
         if (!on && running){ running = false; cancelAnimationFrame(raf); }
       }
       let seen = false;
